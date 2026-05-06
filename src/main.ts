@@ -2726,7 +2726,7 @@ async function initUI() {
       <hr class="about-divider"/>
       <div class="about-section">
         <strong>Built by</strong> Evan J<br>
-        <strong>Licence</strong> PolyForm Noncommercial License 1.0.0<br>
+        <strong>License</strong> PolyForm Noncommercial License 1.0.0<br>
         <strong>Platform</strong> Tauri · macOS · Windows · Linux
       </div>
       <hr class="about-divider"/>
