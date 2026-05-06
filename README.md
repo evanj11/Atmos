@@ -12,6 +12,7 @@ A desktop application for interactive molecular dynamics trajectory analysis and
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Building from Source](#building-from-source)
+- [Building Headless on HPCC](#building-headless-on-hpcc)
 - [Loading a Trajectory](#loading-a-trajectory)
 - [Analysis Tools](#analysis-tools)
   - [Structural](#structural)
@@ -102,7 +103,7 @@ sudo dnf install openblas-devel    # Fedora/RHEL
 ### Build
 
 ```bash
-git clone https://github.com/evanj/atmos
+git clone https://github.com/evanj/Atmos
 cd Atmos
 npm install
 npm run tauri build
@@ -118,6 +119,46 @@ npm run tauri dev
 
 ---
 
+## Building Headless on HPCC
+
+### Build dist/ on local computer
+
+```bash
+git clone https://github.com/evanj/Atmos
+cd Atmos/headless
+npm install
+npm run build
+scp -r dist/ {username}@{hpcc_login}
+```
+
+### Build GUI interface on cluster
+
+```bash
+# on hpcc cluster
+cd /path/to/src-rust/
+# if hpcc has compatible openssl version (try first)
+cargo build --release
+# if no compatible openssl version on hpcc, install openssl using conda, then
+OPENSSL_DIR=$CONDA_PREFIX LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH cargo build --release
+```
+
+### Running Atmos on HPCC
+
+1. Start Atmos server
+```bash
+# run this either interactively or on a compute node
+eval "$(/path/to/conda shell.bash hook)"
+conda activate
+
+export OPENSSL_DIR=$CONDA_PREFIX
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+export DIST_DIR=/path/to/atmos/dist
+
+/path/to/md-server
+```
+2. Once server is running on HPCC, open http://localhost:7373 on your browser
+
+---
 ## Loading a Trajectory
 
 1. Click **Select trajectory** and choose your trajectory file (or double-click a trajectory file in Finder/Explorer to open Atmos directly)
