@@ -9,7 +9,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target:    'http://127.0.0.1:7373',
+        target:    'http://0.0.0.0:7272',
         changeOrigin: true,
         ws: true,   // forward WebSocket upgrades for /api/events
       },
