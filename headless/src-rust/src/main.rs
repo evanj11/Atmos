@@ -3016,7 +3016,7 @@ async fn main() {
         .layer(CorsLayer::permissive())
         .with_state(app_data);
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "7373".to_string());
+    let port = std::env::var("PORT").unwrap_or_else(|_| "7272".to_string());
     let addr = format!("0.0.0.0:{port}");
     println!("md-server listening on http://{addr}");
     println!("SSH tunnel:  ssh -L {port}:localhost:{port} <user>@<cluster>");
