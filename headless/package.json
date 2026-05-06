@@ -1,5 +1,5 @@
 {
-  "name": "md-analyzer-headless",
+  "name": "atmos-headless",
   "private": true,
   "version": "0.1.0",
   "type": "module",
