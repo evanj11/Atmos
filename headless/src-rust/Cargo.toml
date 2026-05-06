@@ -1,0 +1,31 @@
+[package]
+name    = "md-server"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "md-server"
+path = "src/main.rs"
+
+[dependencies]
+# ── Web server ──────────────────────────────────────────────────────────────
+axum            = { version = "0.7", features = ["ws"] }
+tower-http      = { version = "0.5", features = ["fs", "cors"] }
+tokio           = { version = "1",   features = ["full"] }
+
+# ── Serialisation ───────────────────────────────────────────────────────────
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+
+# ── Science (unchanged from Tauri version) ──────────────────────────────────
+chemfiles       = "0.10"
+ndarray         = "0.15"
+# Use openblas-static for a self-contained binary on the cluster.
+# Switch to "intel-mkl-static" if the cluster provides MKL.
+ndarray-linalg  = { version = "0.16", features = ["openblas-system"] }
+rayon           = "1"
+glob            = "0.3"
+
+[profile.release]
+opt-level = 3
+lto       = true   # link-time optimisation — smaller binary, faster math
