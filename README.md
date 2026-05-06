@@ -103,7 +103,7 @@ sudo dnf install openblas-devel    # Fedora/RHEL
 
 ```bash
 git clone https://github.com/evanj/atmos
-cd atmos
+cd Atmos
 npm install
 npm run tauri build
 ```
