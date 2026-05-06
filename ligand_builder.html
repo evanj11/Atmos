@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ligand Builder</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg0:        #0d0e0f;
+      --bg1:        #141618;
+      --bg2:        #1c1f21;
+      --bg3:        #242729;
+      --border:     #2e3235;
+      --border-hi:  #3d4245;
+      --accent:     #00c4a7;
+      --accent-dim: #00856e;
+      --accent2:    #5b8dee;
+      --text:       #e2e4e6;
+      --muted:      #7a7f85;
+      --danger:     #e05c5c;
+      --warn:       #e09a2e;
+      --success:    #4ec97b;
+      --font-sans:  'IBM Plex Sans', sans-serif;
+      --font-mono:  'IBM Plex Mono', monospace;
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg0);
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.5;
+      overflow: hidden;
+    }
+
+    /* ── Shell ── */
+    .shell {
+      display: grid;
+      grid-template-columns: 196px 1fr 316px;
+      grid-template-rows: 44px 1fr;
+      height: 100vh;
+    }
+
+    /* ── Header ── */
+    .header {
+      grid-column: 1 / -1;
+      background: var(--bg1);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      gap: 6px;
+      height: 44px;
+      overflow: hidden;
+    }
+    .logo {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--accent);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+    .sep { width: 1px; height: 18px; background: var(--border); flex-shrink: 0; margin: 0 2px; }
+    .tool-group { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+    .tool-label { font-family: var(--font-mono); font-size: 9px; color: var(--muted); letter-spacing: .05em; flex-shrink: 0; margin-right: 2px; }
+    .hbtn {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 4px 9px;
+      cursor: pointer;
+      transition: border-color .15s, color .15s, background .15s;
+      white-space: nowrap;
+    }
+    .hbtn:hover  { border-color: var(--border-hi); color: var(--text); }
+    .hbtn.active { background: var(--accent); border-color: var(--accent); color: #000; }
+    .hbtn.danger { color: var(--danger); border-color: var(--danger); }
+    .hbtn.danger:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .smiles-in {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 3px;
+      color: var(--text); font-family: var(--font-mono); font-size: 10px;
+      padding: 4px 8px; width: 180px; outline: none; transition: border-color .15s;
+    }
+    .smiles-in:focus { border-color: var(--accent-dim); }
+
+    /* ── Left panel ── */
+    .lpanel {
+      background: var(--bg1); border-right: 1px solid var(--border);
+      overflow-y: auto; padding: 10px; display: flex; flex-direction: column;
+    }
+    .pnl-title {
+      font-family: var(--font-mono); font-size: 9px; color: var(--muted);
+      letter-spacing: .1em; text-transform: uppercase;
+      margin-bottom: 6px; margin-top: 10px; flex-shrink: 0;
+    }
+    .pnl-title:first-child { margin-top: 0; }
+    .elem-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; flex-shrink: 0; }
+    .elem-btn {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 3px;
+      font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+      padding: 5px 2px; cursor: pointer; text-align: center;
+      transition: border-color .15s, background .15s; color: var(--text);
+    }
+    .elem-btn:hover { border-color: var(--border-hi); background: var(--bg3); }
+    .elem-btn.sel   { background: var(--accent); border-color: var(--accent); color: #000; }
+    .side-btn {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 3px;
+      font-family: var(--font-mono); font-size: 10px; padding: 5px 8px;
+      cursor: pointer; width: 100%; text-align: left; margin-bottom: 3px;
+      color: var(--text); transition: border-color .15s, background .15s; flex-shrink: 0;
+    }
+    .side-btn:hover { border-color: var(--border-hi); background: var(--bg3); }
+
+    /* ── 3D editor ── */
+    .editor-wrap { position: relative; background: var(--bg0); overflow: hidden; }
+    #editor-canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
+    .hint-bar {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      background: rgba(13,14,15,.88); padding: 3px 10px;
+      font-family: var(--font-mono); font-size: 9px; color: var(--muted);
+      pointer-events: none; letter-spacing: .02em;
+    }
+    #atom-tooltip {
+      position: absolute;
+      background: rgba(20,22,24,.95); border: 1px solid var(--border-hi);
+      border-radius: 3px; padding: 3px 8px;
+      font-family: var(--font-mono); font-size: 9px; color: var(--text);
+      pointer-events: none; opacity: 0; transition: opacity .1s;
+    }
+
+    /* ── Right panel ── */
+    .rpanel { background: var(--bg1); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+    .depiction-section {
+      flex-shrink: 0; height: 220px; border-bottom: 1px solid var(--border);
+      position: relative; background: var(--bg0);
+    }
+    .depiction-label {
+      position: absolute; top: 5px; left: 8px;
+      font-family: var(--font-mono); font-size: 9px; color: var(--muted);
+      letter-spacing: .08em; text-transform: uppercase; pointer-events: none; z-index: 1;
+    }
+    #depiction-svg { width: 100%; height: 100%; display: block; }
+    .rpanel-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .rtab {
+      flex: 1; background: none; border: none; border-bottom: 2px solid transparent;
+      font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+      padding: 8px 4px; cursor: pointer; text-transform: uppercase;
+      letter-spacing: .05em; transition: color .15s, border-color .15s;
+    }
+    .rtab:hover  { color: var(--text); }
+    .rtab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .rpanel-body { flex: 1; overflow-y: auto; padding: 12px; }
+
+    /* ── Form elements ── */
+    .mini-label {
+      font-family: var(--font-mono); font-size: 9px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; margin-top: 12px;
+    }
+    .mini-label:first-child { margin-top: 0; }
+    .form-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .form-lbl { font-family: var(--font-mono); font-size: 9px; color: var(--muted); width: 76px; flex-shrink: 0; }
+    .form-input {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 3px;
+      color: var(--text); font-family: var(--font-mono); font-size: 11px;
+      padding: 4px 7px; flex: 1; outline: none; transition: border-color .15s;
+    }
+    .form-input:focus  { border-color: var(--accent-dim); }
+    select.form-input  { cursor: pointer; }
+    .form-input.narrow { flex: none; width: 60px; }
+    .form-textarea {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 3px;
+      color: var(--text); font-family: var(--font-mono); font-size: 10px;
+      padding: 6px 8px; width: 100%; outline: none; resize: none;
+      line-height: 1.5; margin-bottom: 8px; transition: border-color .15s;
+    }
+    .form-textarea:focus   { border-color: var(--accent-dim); }
+    .form-textarea.preview { font-size: 9.5px; color: var(--accent2); }
+    .action-btn {
+      background: var(--accent); color: #000; border: none; border-radius: 3px;
+      font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+      padding: 6px 12px; cursor: pointer; width: 100%; margin-bottom: 4px;
+      transition: background .15s; display: inline-flex; align-items: center;
+      justify-content: center; gap: 6px;
+    }
+    .action-btn:hover    { background: #00ddc0; }
+    .action-btn:disabled { background: var(--bg3); color: var(--muted); cursor: not-allowed; }
+    .action-btn.secondary { background: var(--bg2); color: var(--text); border: 1px solid var(--border); }
+    .action-btn.secondary:hover { border-color: var(--border-hi); background: var(--bg3); }
+    .action-btn.warn { background: var(--warn); color: #000; }
+    .action-btn.warn:hover { background: #f0b030; }
+    .stat-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 11px;
+    }
+    .stat-val { font-family: var(--font-mono); color: var(--accent); }
+    .smiles-display {
+      font-family: var(--font-mono); font-size: 10px; color: var(--accent2);
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 3px;
+      padding: 6px 8px; word-break: break-all; line-height: 1.6; margin-bottom: 4px;
+    }
+    .status-line { font-family: var(--font-mono); font-size: 9px; padding: 4px 0; min-height: 20px; }
+    .status-ok   { color: var(--success); }
+    .status-err  { color: var(--danger);  }
+    .status-info { color: var(--muted);   }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block; width: 10px; height: 10px;
+      border: 1.5px solid transparent; border-top-color: currentColor;
+      border-radius: 50%; animation: spin .6s linear infinite;
+    }
+
+    /* ── Progress bar ── */
+    .progress-wrap { margin-bottom: 6px; }
+    .progress-track {
+      height: 3px; background: var(--bg3);
+      border-radius: 2px; overflow: hidden;
+      position: relative; margin-bottom: 4px;
+    }
+    /* Determinate fill */
+    .progress-fill {
+      height: 100%; background: var(--accent);
+      border-radius: 2px;
+      width: 0%;
+      transition: width .25s ease;
+    }
+    /* Indeterminate shimmer for external processes */
+    @keyframes shimmer {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(400%); }
+    }
+    .progress-fill.indeterminate {
+      width: 25% !important;
+      animation: shimmer 1.4s ease-in-out infinite;
+      transition: none;
+    }
+    .progress-text {
+      font-family: var(--font-mono); font-size: 9px; color: var(--muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* ── Method option panels ── */
+    .method-panel { margin-bottom: 4px; }
+
+    /* ── Docking styles ── */
+    .dock-section-title {
+      font-family: var(--font-mono); font-size: 9px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .08em;
+      margin: 12px 0 6px; border-bottom: 1px solid var(--border); padding-bottom: 4px;
+    }
+    .dock-section-title:first-child { margin-top: 0; }
+
+    /* Radio toggle for box mode */
+    .radio-group { display: flex; gap: 4px; margin-bottom: 6px; }
+    .radio-btn {
+      flex: 1; background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 3px; font-family: var(--font-mono); font-size: 10px;
+      color: var(--muted); padding: 4px 6px; cursor: pointer; text-align: center;
+      transition: border-color .15s, color .15s, background .15s;
+    }
+    .radio-btn:hover  { border-color: var(--border-hi); color: var(--text); }
+    .radio-btn.active { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+
+    /* Pose results table */
+    .pose-table {
+      width: 100%; border-collapse: collapse; margin: 6px 0;
+      font-family: var(--font-mono); font-size: 10px;
+    }
+    .pose-table th {
+      text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border);
+      color: var(--muted); font-weight: 400; font-size: 9px; letter-spacing: .05em;
+    }
+    .pose-table td {
+      padding: 3px 6px; border-bottom: 1px solid var(--border);
+      color: var(--text); cursor: pointer;
+    }
+    .pose-table tr:hover td { background: var(--bg2); }
+    .pose-table tr.selected td { background: var(--bg3); color: var(--accent); }
+    .affinity-cell { color: var(--accent2); }
+    .affinity-cell.best { color: var(--success); font-weight: 500; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+
+    <!-- Header toolbar -->
+    <header class="header">
+      <span class="logo">⬡ Ligand Builder</span>
+      <span class="sep"></span>
+      <div class="tool-group">
+        <button class="hbtn active" id="tool-select" title="Select / Move  (V)">Select</button>
+        <button class="hbtn"        id="tool-atom"   title="Add Atom  (A)">Atom</button>
+        <button class="hbtn"        id="tool-bond"   title="Draw Bond  (B)">Bond</button>
+        <button class="hbtn"        id="tool-erase"  title="Erase  (E)">Erase</button>
+      </div>
+      <span class="sep"></span>
+      <div class="tool-group">
+        <span class="tool-label">BOND</span>
+        <button class="hbtn active" id="bord-1" data-order="1" title="Single">—</button>
+        <button class="hbtn"        id="bord-2" data-order="2" title="Double">=</button>
+        <button class="hbtn"        id="bord-3" data-order="3" title="Triple">≡</button>
+        <button class="hbtn"        id="bord-a" data-order="a" title="Aromatic">∿</button>
+      </div>
+      <span class="sep"></span>
+      <div class="tool-group">
+        <button class="hbtn"        id="btn-undo"           title="Undo  (Ctrl+Z)">↩ Undo</button>
+        <button class="hbtn"        id="btn-redo"           title="Redo  (Ctrl+Y)">↪ Redo</button>
+        <button class="hbtn"        id="btn-minimize-quick" title="Quick UFF minimize (200 steps)">⚡ Minimize</button>
+        <button class="hbtn"        id="btn-addH"           title="Add implicit H as explicit atoms">+H</button>
+        <button class="hbtn"        id="btn-clearH"         title="Remove terminal H atoms">−H</button>
+        <button class="hbtn danger" id="btn-clear"          title="Clear canvas">✕ Clear</button>
+      </div>
+      <span class="sep"></span>
+      <div class="tool-group">
+        <input  class="smiles-in" id="smiles-in"       placeholder="Paste SMILES…" spellcheck="false" />
+        <button class="hbtn"      id="btn-smiles-load" >Load</button>
+        <button class="hbtn"      id="btn-smiles-copy" title="Copy SMILES to clipboard">Copy SMILES</button>
+      </div>
+    </header>
+
+    <!-- Left panel -->
+    <aside class="lpanel">
+      <div class="pnl-title">Elements</div>
+      <div class="elem-grid" id="elem-grid"><!-- populated by TS --></div>
+
+      <div class="pnl-title">Ring Templates</div>
+      <button class="side-btn" data-ring="cycloprop" >△  Cyclopropane</button>
+      <button class="side-btn" data-ring="cyclobut"  >□  Cyclobutane</button>
+      <button class="side-btn" data-ring="cyclopent" >⬠  Cyclopentane</button>
+      <button class="side-btn" data-ring="cyclohex"  >⬡  Cyclohexane</button>
+      <button class="side-btn" data-ring="benzene"   >⬡  Benzene</button>
+      <button class="side-btn" data-ring="pyrrole"   >⬠  Pyrrole</button>
+      <button class="side-btn" data-ring="pyridine"  >⬡  Pyridine</button>
+      <button class="side-btn" data-ring="imidazole" >⬠  Imidazole</button>
+      <button class="side-btn" data-ring="furan"     >⬠  Furan</button>
+      <button class="side-btn" data-ring="thiophene" >⬠  Thiophene</button>
+
+      <div class="pnl-title">Fragments</div>
+      <button class="side-btn" data-frag="methyl"  >CH₃  Methyl</button>
+      <button class="side-btn" data-frag="ethyl"   >C₂H₅ Ethyl</button>
+      <button class="side-btn" data-frag="phenyl"  >Ph   Phenyl</button>
+      <button class="side-btn" data-frag="carboxyl">COOH Carboxyl</button>
+      <button class="side-btn" data-frag="amino"   >NH₂  Amino</button>
+      <button class="side-btn" data-frag="hydroxyl">OH   Hydroxyl</button>
+    </aside>
+
+    <!-- 3D editor -->
+    <div class="editor-wrap" id="editor-wrap">
+      <canvas id="editor-canvas"></canvas>
+      <div id="atom-tooltip"></div>
+      <div class="hint-bar">
+        V=Select · A=Atom · B=Bond · E=Erase · Drag=Rotate · Alt/Middle=Pan · Scroll=Zoom · Right-click bond=cycle order
+      </div>
+    </div>
+
+    <!-- Right panel -->
+    <aside class="rpanel">
+
+      <!-- 2D depiction -->
+      <div class="depiction-section">
+        <span class="depiction-label">2D Structure</span>
+        <svg id="depiction-svg" xmlns="http://www.w3.org/2000/svg">
+          <g id="dep-bond-layer"></g>
+          <g id="dep-atom-layer"></g>
+        </svg>
+      </div>
+
+      <!-- Tabs -->
+      <div class="rpanel-tabs">
+        <button class="rtab active" data-tab="props" >Props</button>
+        <button class="rtab"        data-tab="qm"    >QM Input</button>
+        <button class="rtab"        data-tab="dock"  >Dock</button>
+        <button class="rtab"        data-tab="export">Export</button>
+      </div>
+
+      <!-- Props tab -->
+      <div class="rpanel-body" id="tab-props">
+
+        <div class="mini-label">Molecule</div>
+        <div class="stat-row"><span>Atoms (heavy)</span><span class="stat-val" id="stat-atoms"  >0</span></div>
+        <div class="stat-row"><span>Bonds</span>        <span class="stat-val" id="stat-bonds"  >0</span></div>
+        <div class="stat-row"><span>Formula</span>      <span class="stat-val" id="stat-formula">—</span></div>
+        <div class="stat-row"><span>MW (approx.)</span> <span class="stat-val" id="stat-mw"     >—</span></div>
+
+        <div class="mini-label">SMILES</div>
+        <div class="smiles-display" id="smiles-out">Build a molecule to generate SMILES</div>
+
+        <div class="mini-label">Charge &amp; Multiplicity</div>
+        <div class="form-row">
+          <span class="form-lbl">Charge</span>
+          <input class="form-input narrow" id="mol-charge" type="number" value="0" />
+        </div>
+        <div class="form-row">
+          <span class="form-lbl">Multiplicity</span>
+          <input class="form-input narrow" id="mol-mult" type="number" value="1" min="1" />
+        </div>
+
+        <!-- ── Minimization ── -->
+        <div class="mini-label">Minimization Method</div>
+        <div class="form-row">
+          <select class="form-input" id="min-method">
+            <option value="uff"       >UFF (built-in)</option>
+            <option value="gfn2"      >GFN2-xTB</option>
+            <option value="gfn1"      >GFN1-xTB</option>
+            <option value="orca-b3lyp">ORCA · B3LYP / def2-SVP</option>
+            <option value="orca-pbe0" >ORCA · PBE0 / def2-TZVP</option>
+            <option value="orca-wb97" >ORCA · ωB97X-D3 / def2-TZVP</option>
+          </select>
+        </div>
+
+        <!-- UFF options -->
+        <div class="method-panel" id="opts-uff">
+          <div class="form-row">
+            <span class="form-lbl">Steps</span>
+            <input class="form-input narrow" id="min-steps" type="number" value="500" min="10" max="5000" />
+          </div>
+          <div class="form-row">
+            <span class="form-lbl">Convergence</span>
+            <input class="form-input" id="min-conv" type="number" value="0.001" step="0.0001" />
+          </div>
+        </div>
+
+        <!-- xTB options -->
+        <div class="method-panel" id="opts-xtb" style="display:none">
+          <div class="form-row">
+            <span class="form-lbl">xtb binary</span>
+            <input class="form-input" id="xtb-path" value="xtb" spellcheck="false" />
+          </div>
+          <div class="form-row">
+            <span class="form-lbl">Opt level</span>
+            <select class="form-input" id="xtb-level">
+              <option value="crude" >Crude</option>
+              <option value="normal" selected>Normal</option>
+              <option value="tight" >Tight</option>
+              <option value="vtight">Very tight</option>
+            </select>
+          </div>
+          <div style="font-size:9px;color:var(--muted);line-height:1.6;margin-bottom:6px">
+            Requires the <code style="color:var(--accent2)">xtb</code> binary (Grimme group / free).<br>
+            Writes a temp XYZ, runs xTB geometry optimization, reads back the result.
+          </div>
+        </div>
+
+        <!-- ORCA options -->
+        <div class="method-panel" id="opts-orca" style="display:none">
+          <div class="form-row">
+            <span class="form-lbl">orca binary</span>
+            <input class="form-input" id="orca-path" value="orca" spellcheck="false" />
+          </div>
+          <div class="form-row">
+            <span class="form-lbl">Cores</span>
+            <input class="form-input narrow" id="orca-cores" type="number" value="4" min="1" max="128" />
+          </div>
+          <div style="font-size:9px;color:var(--muted);line-height:1.6;margin-bottom:6px">
+            Requires ORCA ≥ 5.0. Writes an input file, streams SCF/opt cycles,<br>
+            reads back the optimized <code style="color:var(--accent2)">.xyz</code>.
+          </div>
+        </div>
+
+        <!-- Run / Cancel buttons -->
+        <button class="action-btn"          id="btn-minimize-full"  >Run Minimization</button>
+        <button class="action-btn warn"     id="btn-minimize-cancel" style="display:none">✕ Cancel</button>
+
+        <!-- Progress bar (shown while running) -->
+        <div class="progress-wrap" id="min-progress-wrap" style="display:none">
+          <div class="progress-track">
+            <div class="progress-fill" id="min-progress-fill"></div>
+          </div>
+          <div class="progress-text" id="min-progress-text"></div>
+        </div>
+
+        <div class="status-line status-info" id="min-status"></div>
+
+        <div class="mini-label">Selected Atom</div>
+        <div id="atom-props-panel" style="color:var(--muted);font-size:11px">No atom selected</div>
+      </div>
+
+      <!-- QM Input tab -->
+      <div class="rpanel-body" id="tab-qm" style="display:none">
+        <div class="mini-label">Program</div>
+        <div class="form-row">
+          <select class="form-input" id="qm-program">
+            <option value="qchem"   >Q-Chem</option>
+            <option value="orca"    >ORCA</option>
+            <option value="gaussian">Gaussian 16</option>
+            <option value="nwchem"  >NWChem</option>
+            <option value="psi4"    >Psi4</option>
+            <option value="gamess"  >GAMESS</option>
+          </select>
+        </div>
+        <div class="mini-label">Job Type</div>
+        <div class="form-row">
+          <select class="form-input" id="qm-jobtype">
+            <option value="sp"      >Single Point</option>
+            <option value="opt"     >Geometry Optimization</option>
+            <option value="freq"    >Frequency</option>
+            <option value="opt_freq">Opt + Freq</option>
+            <option value="ts"      >TS Search</option>
+            <option value="scan"    >Relaxed Scan</option>
+          </select>
+        </div>
+        <div class="mini-label">Method</div>
+        <div class="form-row">
+          <select class="form-input" id="qm-method">
+            <option>B3LYP</option><option>ωB97X-D</option><option>M06-2X</option>
+            <option>MP2</option><option>CCSD(T)</option><option>PBE0</option>
+            <option>HF</option><option>BLYP</option><option>B97-D3</option>
+            <option>CAM-B3LYP</option><option value="custom">custom…</option>
+          </select>
+        </div>
+        <div class="form-row" id="method-custom-row" style="display:none">
+          <input class="form-input" id="qm-method-custom" placeholder="Enter method" />
+        </div>
+        <div class="mini-label">Basis Set</div>
+        <div class="form-row">
+          <select class="form-input" id="qm-basis">
+            <option>6-31G*</option><option>6-31+G**</option><option>6-311+G**</option>
+            <option>cc-pVDZ</option><option>cc-pVTZ</option>
+            <option>aug-cc-pVDZ</option><option>aug-cc-pVTZ</option>
+            <option>def2-SVP</option><option>def2-TZVP</option><option>def2-TZVPP</option>
+            <option>STO-3G</option><option value="custom">custom…</option>
+          </select>
+        </div>
+        <div class="form-row" id="basis-custom-row" style="display:none">
+          <input class="form-input" id="qm-basis-custom" placeholder="Enter basis set" />
+        </div>
+        <div class="mini-label">Solvent (PCM)</div>
+        <div class="form-row">
+          <select class="form-input" id="qm-solvent">
+            <option value="">None (gas phase)</option>
+            <option value="water">Water</option><option value="chloroform">Chloroform</option>
+            <option value="methanol">Methanol</option><option value="dmso">DMSO</option>
+            <option value="thf">THF</option><option value="acetonitrile">Acetonitrile</option>
+            <option value="toluene">Toluene</option>
+          </select>
+        </div>
+        <div class="mini-label">Extra Keywords</div>
+        <textarea class="form-textarea" id="qm-extra" rows="2" placeholder="Additional keywords / directives"></textarea>
+        <button class="action-btn" id="btn-gen-qm">Generate Input File</button>
+        <div class="mini-label">Preview</div>
+        <textarea class="form-textarea preview" id="qm-preview" rows="10" readonly></textarea>
+        <button class="action-btn secondary" id="btn-copy-qm">Copy to Clipboard</button>
+        <button class="action-btn secondary" id="btn-save-qm">Save Input File…</button>
+        <div class="status-line" id="qm-status"></div>
+      </div>
+
+      <!-- Dock tab -->
+      <div class="rpanel-body" id="tab-dock" style="display:none">
+
+        <div class="dock-section-title">Engine</div>
+        <div class="form-row">
+          <select class="form-input" id="dock-engine">
+            <option value="vina"   >AutoDock Vina</option>
+            <option value="unidock">UniDock (GPU)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <span class="form-lbl">Binary</span>
+          <input class="form-input" id="dock-binary" value="vina" spellcheck="false" />
+        </div>
+
+        <div class="dock-section-title">Receptor</div>
+        <div class="form-row">
+          <span class="form-lbl">PDB or PDBQT</span>
+          <input class="form-input" id="dock-receptor-path" placeholder="path/to/receptor.pdb  or  .pdbqt" spellcheck="false" />
+        </div>
+        <button class="action-btn secondary" id="btn-pick-receptor" style="margin-bottom:6px">Browse Receptor…</button>
+        <div style="font-size:9px;color:var(--muted);line-height:1.6;margin-bottom:6px">
+          PDB files are automatically converted to PDBQT via obabel before docking.
+          PDBQT files are passed directly to Vina.
+        </div>
+
+        <!-- obabel path — always visible since it's needed for auto PDB conversion -->
+        <div class="form-row">
+          <span class="form-lbl">obabel path</span>
+          <input class="form-input" id="dock-obabel-path" value="obabel" spellcheck="false"
+                 title="Required when receptor is a PDB file. Enter 'obabel' if on PATH, or the full path to the obabel binary." />
+        </div>
+
+        <div class="dock-section-title">Search Box</div>
+        <div class="radio-group" id="dock-box-mode">
+          <button class="radio-btn active" data-box="receptor">Auto (receptor)</button>
+          <button class="radio-btn"        data-box="ligand"  >Auto (ligand)</button>
+          <button class="radio-btn"        data-box="manual"  >Manual</button>
+        </div>
+        <!-- Center coords shown in all modes: auto modes update them on receptor/ligand change -->
+        <div class="form-row" style="gap:4px">
+          <span class="form-lbl">Center</span>
+          <input class="form-input" id="dock-cx" type="number" step="0.1" value="0" style="width:52px;flex:none" title="X"/>
+          <input class="form-input" id="dock-cy" type="number" step="0.1" value="0" style="width:52px;flex:none" title="Y"/>
+          <input class="form-input" id="dock-cz" type="number" step="0.1" value="0" style="width:52px;flex:none" title="Z"/>
+        </div>
+        <div class="form-row" style="gap:4px">
+          <span class="form-lbl">Box (Å)</span>
+          <input class="form-input" id="dock-sx" type="number" step="1" value="20" style="width:52px;flex:none" title="X size"/>
+          <input class="form-input" id="dock-sy" type="number" step="1" value="20" style="width:52px;flex:none" title="Y size"/>
+          <input class="form-input" id="dock-sz" type="number" step="1" value="20" style="width:52px;flex:none" title="Z size"/>
+        </div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:6px;line-height:1.6">
+          <b>Auto (receptor)</b> — centres box on receptor centre of mass (recommended).<br>
+          <b>Auto (ligand)</b> — centres on current ligand position.<br>
+          <b>Manual</b> — enter exact coordinates.
+        </div>
+        <button class="action-btn secondary" id="btn-preview-box" style="margin-bottom:6px">
+          ◎ Preview Box in 3D Viewer
+        </button>
+
+        <div class="dock-section-title">Parameters</div>
+        <div class="form-row">
+          <span class="form-lbl">Exhaustiveness</span>
+          <input class="form-input narrow" id="dock-exhaustiveness" type="number" value="8" min="1" max="128"/>
+        </div>
+        <div class="form-row">
+          <span class="form-lbl">Poses</span>
+          <input class="form-input narrow" id="dock-num-poses" type="number" value="9" min="1" max="50"/>
+        </div>
+        <div class="form-row">
+          <span class="form-lbl">Energy range</span>
+          <input class="form-input narrow" id="dock-energy-range" type="number" value="3" min="1" max="10" step="0.5"/>
+        </div>
+        <div class="form-row">
+          <span class="form-lbl">CPU threads</span>
+          <input class="form-input narrow" id="dock-cpu" type="number" value="4" min="1" max="128"/>
+        </div>
+
+        <!-- Ligand note -->
+        <div style="font-size:9px;color:var(--muted);line-height:1.6;margin-bottom:8px">
+          Ligand PDBQT is generated internally from the current 3D structure.
+          Atom types and partial charges are assigned automatically.
+        </div>
+
+        <button class="action-btn"      id="btn-run-dock"    >Run Docking</button>
+        <button class="action-btn warn" id="btn-cancel-dock"  style="display:none">✕ Cancel</button>
+
+        <!-- Docking progress bar -->
+        <div class="progress-wrap" id="dock-progress-wrap" style="display:none">
+          <div class="progress-track">
+            <div class="progress-fill indeterminate" id="dock-progress-fill"></div>
+          </div>
+          <div class="progress-text" id="dock-progress-text"></div>
+        </div>
+
+        <div class="status-line" id="dock-status"></div>
+
+        <!-- Pose results (shown after docking) -->
+        <div id="dock-results-section" style="display:none">
+          <div class="dock-section-title">Results</div>
+          <table class="pose-table" id="dock-pose-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Affinity (kcal/mol)</th>
+                <th>RMSD</th>
+              </tr>
+            </thead>
+            <tbody id="dock-pose-tbody"></tbody>
+          </table>
+          <button class="action-btn" id="btn-view-complex" style="margin-top:6px">
+            ◎ View Docked Complex in 3D
+          </button>
+          <div class="form-row" style="margin-top:4px;gap:4px">
+            <button class="action-btn secondary" id="btn-load-pose"     style="flex:1;margin-bottom:0">Load Pose into Editor</button>
+            <button class="action-btn secondary" id="btn-save-pose-xyz" style="flex:1;margin-bottom:0">Save XYZ…</button>
+          </div>
+          <button class="action-btn secondary" id="btn-save-all-poses" style="margin-top:4px">Save All Poses PDBQT…</button>
+        </div>
+
+      </div>
+
+      <!-- Export tab -->
+      <div class="rpanel-body" id="tab-export" style="display:none">
+        <div class="mini-label">Save Structure</div>
+        <button class="action-btn secondary" id="btn-save-xyz">Save XYZ…</button>
+        <button class="action-btn secondary" id="btn-save-pdb">Save PDB…</button>
+        <button class="action-btn secondary" id="btn-save-mol">Save MOL…</button>
+        <button class="action-btn secondary" id="btn-save-sdf">Save SDF…</button>
+        <div class="mini-label">QM/MM Integration</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.6;margin-bottom:8px">
+          Append this ligand into the active QM region in the main window.
+        </div>
+        <div class="form-row">
+          <span class="form-lbl">Residue name</span>
+          <input class="form-input narrow" id="exp-resname" value="LIG" maxlength="4" />
+        </div>
+        <button class="action-btn" id="btn-append-qm-region">Append to QM Region</button>
+        <div class="mini-label">Clipboard</div>
+        <button class="action-btn secondary" id="btn-copy-xyz"   >Copy XYZ</button>
+        <button class="action-btn secondary" id="btn-copy-smiles">Copy SMILES</button>
+        <div class="status-line" id="exp-status"></div>
+      </div>
+
+    </aside>
+  </div>
+
+  <script type="module" src="/src/ligand_builder.ts"></script>
+</body>
+</html>

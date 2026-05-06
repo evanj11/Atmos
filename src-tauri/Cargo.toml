@@ -1,0 +1,30 @@
+[package]
+name = "atmos"
+version = "0.1.0"
+description = "Atmos — Analysis, Trajectory, Molecular & Optimization Suite"
+authors = ["Evan J"]
+edition = "2021"
+
+[lib]
+name = "atmos_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+ndarray = { version = "0.15", features = ["rayon"] }
+rayon = "1.8"
+chemfiles = "0.10.41"
+ndarray-linalg = { version = "0.16", features = ["openblas-system"] }
+blas-src = { version = "0.8", features = ["accelerate"] }
+glob = "0.3"
+tempfile = "3"
+tokio = { version = "1", features = ["process", "io-util"] }

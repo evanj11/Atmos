@@ -1,0 +1,778 @@
+import { invoke } from '@tauri-apps/api/core';
+
+// ─── NGL stubs ────────────────────────────────────────────────────────────────
+declare const NGL: {
+  Stage: new (id: string, params?: Record<string, unknown>) => NGLStage;
+};
+interface NGLStage {
+  loadFile(blob: Blob, params: Record<string, unknown>): Promise<NGLComponent>;
+  autoView(): void;
+  handleResize(): void;
+  viewer: { requestRender(): void };
+  signals: { clicked: { add(fn: (pd: any) => void): void } };
+}
+interface NGLComponent {
+  removeAllRepresentations(): void;
+  addRepresentation(type: string, params?: Record<string, unknown>): void;
+  updateRepresentations?: (params: Record<string, unknown>) => void;
+  autoView(sel?: string, ms?: number): void;
+  structure: { updatePosition(data: Float32Array): void };
+}
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let stage:        NGLStage | null = null;
+let comp:         NGLComponent | null = null;
+let currentMode:  string = 'cartoon';
+let currentColor: string = 'resname';
+
+// QM region selection state (umbrella mode only)
+let qmSerials:    Set<number> = new Set();  // 1-based PDB serial numbers
+let qmSelectMode: boolean = false;          // true = click adds to QM region
+let currentWindowIdx: number = 0;
+
+// ─── DOM helpers ─────────────────────────────────────────────────────────────
+const el = (id: string) => document.getElementById(id)!;
+function setStatus(msg: string, hide = false) {
+  el('status-overlay').textContent = msg;
+  el('status-overlay').classList.toggle('hidden', hide);
+}
+function setInfoPill(text: string)  { el('info-pill').textContent  = text; }
+function setModeLabel(text: string) { el('mode-label').textContent = text; }
+function hideColorbar() {
+  const w = document.querySelector('.colorbar-wrap') as HTMLElement | null;
+  if (w) w.style.display = 'none';
+}
+function showColorbar() {
+  const w = document.querySelector('.colorbar-wrap') as HTMLElement | null;
+  if (w) w.style.display = '';
+}
+
+// ─── Colorbar ────────────────────────────────────────────────────────────────
+function buildBfactorColorbar() {
+  const grad = el('cb-h-grad');
+  grad.innerHTML = [
+    [0, 'rgb(0,0,255)'], [0.25, 'rgb(0,255,255)'], [0.5, 'rgb(0,255,0)'],
+    [0.75, 'rgb(255,255,0)'], [1, 'rgb(255,0,0)'],
+  ].map(([o, c]) => `<stop offset="${(+o * 100).toFixed(0)}%" stop-color="${c}"/>`).join('');
+  el('cb-lo').textContent = 'rigid';
+  el('cb-hi').textContent = 'flexible';
+  showColorbar();
+}
+
+// ─── Loaders ─────────────────────────────────────────────────────────────────
+//
+// NGL 2.0.0-dev.38 adds its default representation asynchronously after
+// loadFile() resolves, via an internal hook chain that can take multiple
+// event-loop ticks. The length of this chain scales with system size —
+// large all-atom QM/MM systems need ~100ms+ for bond inference to complete.
+//
+// Strategy: after loadFile resolves, poll every 50ms until NGL's internal
+// representation count drops to 0 naturally (or we time it out after 2s),
+// then remove everything once more and apply ours. This is robust across
+// all system sizes and NGL versions.
+
+function applyAfterNglReady(applyFn: (c: NGLComponent) => void): void {
+  const MAX_WAIT_MS = 2000;
+  const POLL_MS     = 50;
+  const start       = Date.now();
+
+  function poll() {
+    if (!comp) return;
+    // Force-clear on every poll tick so NGL can't sneak reps back in
+    comp.removeAllRepresentations();
+
+    if (Date.now() - start > MAX_WAIT_MS) {
+      // Timeout — apply anyway
+      comp.removeAllRepresentations();
+      applyFn(comp);
+      stage?.viewer.requestRender();
+      return;
+    }
+
+    // Wait another tick and try again — after ~100ms the NGL hooks are done
+    // and removeAllRepresentations() will "stick"
+    setTimeout(() => {
+      if (!comp) return;
+      comp.removeAllRepresentations();
+      // Give NGL one final tick to respond, then apply for real
+      setTimeout(() => {
+        if (!comp) return;
+        comp.removeAllRepresentations();
+        applyFn(comp);
+        stage?.viewer.requestRender();
+      }, POLL_MS);
+    }, POLL_MS);
+  }
+
+  // Start polling after the initial promise resolution tick
+  setTimeout(poll, 0);
+}
+
+function loadPdbThen(frameIdx: number, applyFn: (c: NGLComponent) => void): void {
+  invoke<string>('get_snapshot_pdb', { frameIdx: frameIdx })
+    .then(pdb => {
+      const blob = new Blob([pdb], { type: 'text/plain' });
+      return stage!.loadFile(blob, { ext: 'pdb', firstModelOnly: true });
+    })
+    .then(component => {
+      comp = component;
+      applyAfterNglReady(applyFn);
+    })
+    .catch(err => { setStatus(`Failed to load structure: ${err}`); console.error(err); });
+}
+
+function loadUmbrellaThen(windowIdx: number, applyFn: (c: NGLComponent) => void): void {
+  invoke<string>('get_umbrella_snapshot_pdb', { windowIdx: windowIdx })
+    .then(pdb => {
+      const blob = new Blob([pdb], { type: 'text/plain' });
+      return stage!.loadFile(blob, { ext: 'pdb', firstModelOnly: true });
+    })
+    .then(component => {
+      comp = component;
+      applyAfterNglReady(applyFn);
+    })
+    .catch(err => { setStatus(`Failed to load window ${windowIdx}: ${err}`); console.error(err); });
+}
+
+// ─── Representation appliers ──────────────────────────────────────────────────
+// ─── Residue metadata ─────────────────────────────────────────────────────────
+// Fetched once after PDB loads. Maps selection atom index → residue info.
+// Used by all representation functions to build correct NGL selectors.
+
+interface ResInfo { res_seq: number; res_name: string; chain_id: string; }
+let selectionResidues: ResInfo[] = [];
+
+async function fetchSelectionResidues(): Promise<void> {
+  try {
+    selectionResidues = await invoke<ResInfo[]>('get_selection_residues');
+  } catch (_) {
+    selectionResidues = [];
+  }
+}
+
+// Build an NGL "@" selector for all atoms belonging to the same residue
+// as selection atom `atomIndex`. Works for Cα-only (1 atom/residue),
+// full-atom (many atoms/residue), and any subregion.
+//
+// NGL's @ selector uses 0-based indices into the *loaded* structure —
+// i.e. the position of the atom in the PDB we sent, which is the same
+// as the selection index since get_snapshot_pdb writes selection atoms
+// in order.  This is the most reliable selector across all NGL versions.
+
+function nglResSel(atomIndex: number): string {
+  const info = selectionResidues[atomIndex];
+  if (!info) return `@${atomIndex}`;
+  // Collect all selection indices that share the same residue
+  const indices = selectionResidues
+    .map((r, i) => (r.res_seq === info.res_seq && r.chain_id === info.chain_id) ? i : -1)
+    .filter(i => i >= 0);
+  return `@${indices.join(',')}`;
+}
+
+// Selector covering a ±radius window of residues around atomIndex.
+// Finds unique res_seq values within the atom-index window, then
+// includes all atoms that share those res_seq values.
+function nglNeighbourSel(atomIndex: number, radius: number): string {
+  const n = selectionResidues.length;
+  if (n === 0) {
+    const lo = Math.max(0, atomIndex - radius);
+    const hi = Math.min(n > 0 ? n - 1 : atomIndex + radius, atomIndex + radius);
+    return `@${Array.from({ length: hi - lo + 1 }, (_, k) => lo + k).join(',')}`;
+  }
+  // Step 1: find unique res_seq values near atomIndex
+  const lo = Math.max(0, atomIndex - radius);
+  const hi = Math.min(n - 1, atomIndex + radius);
+  const nearSeqs = new Set<number>();
+  for (let k = lo; k <= hi; k++) {
+    if (selectionResidues[k]) nearSeqs.add(selectionResidues[k].res_seq);
+  }
+  // Step 2: include ALL atoms belonging to those residues
+  const indices = selectionResidues
+    .map((r, i) => nearSeqs.has(r.res_seq) ? i : -1)
+    .filter(i => i >= 0);
+  return `@${indices.join(',')}`;
+}
+
+function applyFrameReps() {
+  if (!comp) return;
+  comp.removeAllRepresentations();
+  comp.addRepresentation(currentMode, { sele: 'polymer', colorScheme: currentColor });
+  stage?.viewer.requestRender();
+}
+
+function applyBfactorReps() {
+  if (!comp) return;
+  comp.removeAllRepresentations();
+  comp.addRepresentation(currentMode, { sele: 'polymer', colorScheme: 'bfactor' });
+  stage?.viewer.requestRender();
+}
+
+function applyResidueReps(atomIndex: number) {
+  if (!comp) return;
+  const focal   = nglResSel(atomIndex);
+  const context = nglNeighbourSel(atomIndex, 5);
+  // All atoms NOT in the focal residue for the faded background
+  const focalIndices = new Set(focal.slice(1).split(',').map(Number));
+  const bgIndices = selectionResidues
+    .map((_, i) => focalIndices.has(i) ? -1 : i)
+    .filter(i => i >= 0);
+  const bgSel = bgIndices.length > 0 ? `@${bgIndices.join(',')}` : 'none';
+
+  comp.removeAllRepresentations();
+  if (bgIndices.length > 0) {
+    comp.addRepresentation('backbone', { sele: bgSel, colorScheme: currentColor, opacity: 0.6, radius: 0.1 });
+  }
+  comp.addRepresentation('ball+stick', { sele: context, colorScheme: currentColor, opacity: 0.75, radius: 0.2 });
+  comp.addRepresentation('ball+stick', { sele: focal,   colorScheme: 'element',    opacity: 1.0,  radius: 0.5 });
+  stage?.viewer.requestRender();
+}
+
+function applyPairReps(iAtom: number, jAtom: number) {
+  if (!comp) return;
+  const selI = nglResSel(iAtom);
+  const selJ = nglResSel(jAtom);
+  // Build a selector for everything EXCEPT the two focal residues
+  const focalIndices = new Set([
+    ...selI.slice(1).split(',').map(Number),
+    ...selJ.slice(1).split(',').map(Number),
+  ]);
+  const bgIndices = selectionResidues
+    .map((_, i) => focalIndices.has(i) ? -1 : i)
+    .filter(i => i >= 0);
+  const bgSel = bgIndices.length > 0 ? `@${bgIndices.join(',')}` : 'none';
+
+  comp.removeAllRepresentations();
+  // Background: all non-focal atoms, faded cartoon/backbone
+  if (bgIndices.length > 0) {
+    comp.addRepresentation('backbone', { sele: bgSel, colorScheme: 'uniform', color: '#4a7fa5', opacity: 0.6, radius: 0.15 });
+  }
+  // Focal residues as ball+stick
+  comp.addRepresentation('ball+stick', { sele: selI, colorScheme: 'uniform', color: '#ffdd00', radius: 0.5, opacity: 1.0 });
+  comp.addRepresentation('ball+stick', { sele: selJ, colorScheme: 'uniform', color: '#00c4a7', radius: 0.5, opacity: 1.0 });
+  stage?.viewer.requestRender();
+}
+
+// ─── Umbrella representation ──────────────────────────────────────────────────
+// Protein as cartoon, heteroatoms (ligand/substrate/QM region) as ball+stick.
+// QM-selected atoms get an orange highlight overlay.
+function applyUmbrellaReps() {
+  if (!comp) return;
+  comp.removeAllRepresentations();
+
+  // Protein backbone
+  comp.addRepresentation(currentMode, {
+    sele: 'protein', colorScheme: currentColor, opacity: 0.8,
+  });
+
+  // Ligand / heteroatoms — licorice uses only the bond table, never distance
+  // inference, so no spurious cross-atom bonds regardless of packing density.
+  comp.addRepresentation('licorice', {
+    sele: 'not (protein or water or ion)', colorScheme: 'element',
+    radius: 0.15, multipleBond: 'symmetric',
+  });
+
+  // QM-selected atoms highlighted in orange on top.
+  // NGL's @ selector takes comma-separated 0-based atom indices.
+  // Our qmSerials are 1-based PDB serials, so convert: index = serial - 1.
+  // No spaces, no 'serial' keyword, no 'or' — just "@0,1,2,3"
+  if (qmSerials.size > 0) {
+    const indices = Array.from(qmSerials)
+      .filter(s => s > 0)
+      .map(s => s - 1)        // 1-based serial → 0-based NGL index
+      .join(',');
+    comp.addRepresentation('spacefill', {
+      sele:        `@${indices}`,
+      colorScheme: 'uniform',
+      color:       '#ff7700',
+      radius:      0.55,       // sphere radius — no bonds drawn with spacefill
+      opacity:     0.9,
+    });
+  }
+
+  stage?.viewer.requestRender();
+}
+
+// ─── QM region panel ─────────────────────────────────────────────────────────
+
+function updateQmPanel() {
+  const counter = el('qm-count');
+  const list    = el('qm-list');
+  const saveBtn = el('qm-save-btn') as HTMLButtonElement;
+
+  counter.textContent = `${qmSerials.size} atom${qmSerials.size !== 1 ? 's' : ''} selected`;
+  saveBtn.disabled    = qmSerials.size === 0;
+
+  // Summarise by residue
+  // We track residue labels separately when atoms are clicked
+  const labels = Array.from(qmSerials).sort((a, b) => a - b);
+  list.innerHTML = labels.length === 0
+    ? '<span style="color:var(--muted);font-size:10px">None — click atoms or enter a selection string</span>'
+    : labels.map(s => `<span class="qm-atom-tag" data-serial="${s}">${s}</span>`).join('');
+
+  // Allow removing individual serials by clicking their tag
+  list.querySelectorAll<HTMLElement>('.qm-atom-tag').forEach(tag => {
+    tag.addEventListener('click', () => {
+      qmSerials.delete(parseInt(tag.dataset.serial!, 10));
+      updateQmPanel();
+      applyUmbrellaReps();
+    });
+  });
+}
+
+
+// ─── Mode initializers ────────────────────────────────────────────────────────
+
+function modeBfactor() {
+  setModeLabel('B-factor / Flexibility');
+  buildBfactorColorbar();
+  loadPdbThen(0, async () => {
+    await fetchSelectionResidues();
+    applyBfactorReps(); comp!.autoView();
+    setInfoPill('Colored by stored analysis value (blue=rigid → red=flexible)');
+    setStatus('', true);
+  });
+}
+
+function modeFrame(frameIdx: number) {
+  setModeLabel(`Frame ${frameIdx}`);
+  hideColorbar();
+  loadPdbThen(0, async () => {
+    await fetchSelectionResidues();
+    const flat = await invoke<number[]>('get_frame_coords', { frameIdx: frameIdx });
+    comp!.structure.updatePosition(new Float32Array(flat));
+    comp!.updateRepresentations?.({ position: true });
+    applyFrameReps(); comp!.autoView();
+    setInfoPill(`Trajectory frame ${frameIdx}`);
+    setStatus('', true);
+  });
+}
+
+function modeResidue(atomIndex: number) {
+  setModeLabel(`Residue (atom ${atomIndex})`);
+  hideColorbar();
+  loadPdbThen(0, async () => {
+    await fetchSelectionResidues();
+    const label = selectionResidues[atomIndex]
+      ? `${selectionResidues[atomIndex].res_name} ${selectionResidues[atomIndex].res_seq}`
+      : `atom ${atomIndex}`;
+    setModeLabel(`Residue ${label}`);
+    applyResidueReps(atomIndex);
+    comp!.autoView(nglResSel(atomIndex), 0);
+    setInfoPill(`${label} (selection index ${atomIndex})`);
+    setStatus('', true);
+  });
+}
+
+function modePair(iAtom: number, jAtom: number) {
+  setModeLabel(`Pair (atoms ${iAtom} & ${jAtom})`);
+  hideColorbar();
+  loadPdbThen(0, async () => {
+    await fetchSelectionResidues();
+    const labelI = selectionResidues[iAtom]
+      ? `${selectionResidues[iAtom].res_name} ${selectionResidues[iAtom].res_seq}`
+      : `atom ${iAtom}`;
+    const labelJ = selectionResidues[jAtom]
+      ? `${selectionResidues[jAtom].res_name} ${selectionResidues[jAtom].res_seq}`
+      : `atom ${jAtom}`;
+    setModeLabel(`${labelI} & ${labelJ}`);
+    applyPairReps(iAtom, jAtom);
+    // autoView to both residues — union of their @ selectors
+    const indicesI = selectionResidues
+      .map((r, i) => r.res_seq === selectionResidues[iAtom]?.res_seq ? i : -1).filter(i => i >= 0);
+    const indicesJ = selectionResidues
+      .map((r, i) => r.res_seq === selectionResidues[jAtom]?.res_seq ? i : -1).filter(i => i >= 0);
+    comp!.autoView(`@${[...indicesI, ...indicesJ].join(',')}`, 0);
+    setInfoPill(`${labelI} (yellow) & ${labelJ} (cyan)`);
+    setStatus('', true);
+  });
+}
+
+function modeUmbrella(windowIdx: number) {
+  currentWindowIdx = windowIdx;
+  setModeLabel(`Window ${windowIdx}`);
+  hideColorbar();
+
+  // Show the QM region panel
+  const qmPanel = el('qm-panel');
+  qmPanel.style.display = 'flex';
+
+  loadUmbrellaThen(windowIdx, () => {
+    applyUmbrellaReps();
+    comp!.autoView('protein', 0);
+    setInfoPill(`Umbrella window ${windowIdx} — click atoms to build QM region`);
+    setStatus('', true);
+  });
+
+  // Load any previously saved QM region for this window
+  invoke<any>('get_qm_region').then(region => {
+    if (region && region.window_idx === windowIdx) {
+      qmSerials = new Set(region.atoms.map((a: any) => a.serial));
+      updateQmPanel();
+      applyUmbrellaReps();
+      el('qm-mask-out').textContent = region.amber_mask;
+    }
+  }).catch(() => {});
+}
+
+// ─── Dihedral mode ────────────────────────────────────────────────────────────
+//
+// Shows the selected residue highlighted in 3D alongside a floating mini
+// Ramachandran scatter (canvas overlay) of that residue's φ/ψ trajectory.
+// Points are coloured by frame index to reveal time evolution.
+
+function modeDihedral(atomIndex: number) {
+  setModeLabel(`Dihedrals (atom ${atomIndex})`);
+  hideColorbar();
+
+  loadPdbThen(0, async () => {
+    await fetchSelectionResidues();
+
+    const label = selectionResidues[atomIndex]
+      ? `${selectionResidues[atomIndex].res_name} ${selectionResidues[atomIndex].res_seq}`
+      : `atom ${atomIndex}`;
+    setModeLabel(`Dihedrals · ${label}`);
+
+    // Highlight the residue in 3D (same style as residue mode)
+    applyResidueReps(atomIndex);
+    comp!.autoView(nglResSel(atomIndex), 0);
+    setStatus('', true);
+
+    // Fetch full φ/ψ time series from cache
+    let dihedData: { phi: number[], psi: number[], res_seq: number, res_name: string, mode: string } | null = null;
+    try {
+      dihedData = await invoke<any>('get_residue_dihedrals', { atomIdx: atomIndex });
+    } catch (e) {
+      setInfoPill(`${label} — run Ramachandran analysis first for dihedral overlay`);
+      return;
+    }
+
+    const phi    = dihedData!.phi;
+    const psi    = dihedData!.psi;
+    const nFrames = phi.length;
+    const isPseudo = dihedData!.mode !== 'backbone';
+
+    setInfoPill(`${label} · ${isPseudo ? 'pseudo-dihedral' : 'φ/ψ backbone'} · ${nFrames} frames`);
+
+    // ── Inject floating Ramachandran overlay ────────────────────────────────
+    let overlay = document.getElementById('dihedral-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'dihedral-overlay';
+      overlay.style.cssText = `
+        position:absolute; top:60px; right:16px; z-index:20;
+        background:rgba(13,14,15,0.88); border:1px solid #2e3235; border-radius:5px;
+        padding:10px; display:flex; flex-direction:column; gap:6px;
+        backdrop-filter:blur(4px);`;
+      document.querySelector('.middle')?.appendChild(overlay);
+    }
+
+    const SIZE   = 200;   // canvas pixels (CSS)
+    const PAD    = 20;
+    const inner  = SIZE - PAD * 2;
+    const dpr    = window.devicePixelRatio || 1;
+    const PX     = Math.round(SIZE * dpr);
+
+    // Header
+    const header = document.createElement('div');
+    header.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;';
+    header.textContent = isPseudo ? 'Pseudo-dihedral' : 'Ramachandran';
+    overlay.innerHTML = '';
+    overlay.appendChild(header);
+
+    // Canvas
+    const canvas       = document.createElement('canvas');
+    canvas.width       = PX; canvas.height = PX;
+    canvas.style.cssText = `width:${SIZE}px;height:${SIZE}px;display:block;border-radius:2px;`;
+    overlay.appendChild(canvas);
+
+    const ctx = canvas.getContext('2d')!;
+    ctx.scale(dpr, dpr);
+
+    // Background
+    ctx.fillStyle = '#0d0e0f';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    // Grid lines at 0°
+    ctx.strokeStyle = '#2e3235'; ctx.lineWidth = 0.5;
+    // Vertical (φ=0)
+    const x0 = PAD + inner/2, y0 = PAD + inner/2;
+    ctx.beginPath(); ctx.moveTo(x0, PAD); ctx.lineTo(x0, PAD+inner); ctx.stroke();
+    // Horizontal (ψ=0)
+    ctx.beginPath(); ctx.moveTo(PAD, y0); ctx.lineTo(PAD+inner, y0); ctx.stroke();
+
+    // Allowed region hints (α helix and β sheet, very faint)
+    const toC = (phi: number, psi: number) => [
+      PAD + (phi + 180) / 360 * inner,
+      PAD + inner - (psi + 180) / 360 * inner,
+    ] as [number, number];
+
+    ctx.fillStyle = 'rgba(0,196,167,0.07)';
+    ctx.strokeStyle = 'rgba(0,196,167,0.15)'; ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    [[-90,-75],[-30,-75],[-30,-15],[-90,-15],[-90,-75]].forEach(([p,s],i) => {
+      const [cx,cy] = toC(p,s); i===0 ? ctx.moveTo(cx,cy) : ctx.lineTo(cx,cy);
+    }); ctx.closePath(); ctx.fill(); ctx.stroke();
+
+    ctx.fillStyle = 'rgba(91,141,238,0.07)';
+    ctx.strokeStyle = 'rgba(91,141,238,0.15)';
+    ctx.beginPath();
+    [[-150,105],[-90,105],[-90,165],[-150,165],[-150,105]].forEach(([p,s],i) => {
+      const [cx,cy] = toC(p,s); i===0 ? ctx.moveTo(cx,cy) : ctx.lineTo(cx,cy);
+    }); ctx.closePath(); ctx.fill(); ctx.stroke();
+
+    // Scatter: colour each point by frame index (cold→warm)
+    const validPairs: [number, number, number][] = [];
+    for (let t = 0; t < nFrames; t++) {
+      if (isFinite(phi[t]) && isFinite(psi[t])) validPairs.push([phi[t], psi[t], t]);
+    }
+    for (const [ph, ps, t] of validPairs) {
+      const frac = t / (nFrames - 1 || 1);
+      const r    = Math.round(50  + frac * 205);
+      const g    = Math.round(100 - frac * 60);
+      const b    = Math.round(220 - frac * 180);
+      const [cx, cy] = toC(ph, ps);
+      ctx.fillStyle = `rgba(${r},${g},${b},0.55)`;
+      ctx.beginPath(); ctx.arc(cx, cy, 1.5 * dpr / dpr, 0, Math.PI*2); ctx.fill();
+    }
+
+    // Mean position as a filled star marker
+    const phiFinite = phi.filter(v => isFinite(v));
+    const psiFinite = psi.filter(v => isFinite(v));
+    if (phiFinite.length > 0) {
+      const phiMean = phiFinite.reduce((a,b) => a+b, 0) / phiFinite.length;
+      const psiMean = psiFinite.reduce((a,b) => a+b, 0) / psiFinite.length;
+      const [mx, my] = toC(phiMean, psiMean);
+      ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#0d0e0f'; ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.arc(mx, my, 4, 0, Math.PI*2);
+      ctx.fill(); ctx.stroke();
+
+      // Axis labels
+      ctx.fillStyle = '#7a7f85';
+      ctx.font = `${Math.round(8*dpr)/dpr}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText('φ', PAD + inner/2, PAD + inner + 12);
+      ctx.textAlign = 'right';
+      ctx.save(); ctx.translate(PAD-10, PAD+inner/2); ctx.rotate(-Math.PI/2);
+      ctx.fillText('ψ', 0, 0); ctx.restore();
+
+      // Stats line
+      const statsEl = document.createElement('div');
+      statsEl.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--muted);line-height:1.5;';
+      statsEl.innerHTML = `φ̄ = ${phiMean.toFixed(1)}°<br>ψ̄ = ${psiMean.toFixed(1)}°<br>${validPairs.length} valid frames`;
+      overlay.appendChild(statsEl);
+    }
+
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = `position:absolute;top:6px;right:8px;background:none;border:none;
+      color:var(--muted);cursor:pointer;font-size:11px;padding:0;line-height:1;`;
+    closeBtn.addEventListener('click', () => overlay!.remove());
+    overlay.appendChild(closeBtn);
+  });
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+async function init() {
+  const params     = new URLSearchParams(window.location.search);
+  const mode       = params.get('mode')   ?? 'bfactor';
+  const frameIdx   = parseInt(params.get('frame')  ?? '0', 10);
+  const atomIdx    = parseInt(params.get('index')  ?? '0', 10);
+  const pairI      = parseInt(params.get('i')      ?? '0', 10);
+  const pairJ      = parseInt(params.get('j')      ?? '0', 10);
+  const windowIdx  = parseInt(params.get('window') ?? '0', 10);
+  const clusterFrame = parseInt(params.get('cluster_frame') ?? '0', 10);
+
+  // @ts-ignore
+  stage = new NGL.Stage('viewport', { backgroundColor: '#060708' });
+  setStatus('Loading structure…');
+
+  // Lock controls for fixed modes
+  if (mode === 'bfactor') {
+    currentColor = 'bfactor';
+    const sel = el('color-scheme') as HTMLSelectElement;
+    sel.value = 'bfactor'; sel.disabled = true;
+  }
+  if (mode === 'pair') {
+    el('style-group').style.opacity = '0.3';
+    el('style-group').style.pointerEvents = 'none';
+    const cw = document.querySelector('.color-wrap') as HTMLElement | null;
+    if (cw) { cw.style.opacity = '0.3'; cw.style.pointerEvents = 'none'; }
+  }
+
+  switch (mode) {
+    case 'bfactor':  modeBfactor();                     break;
+    case 'frame':    modeFrame(frameIdx);               break;
+    case 'residue':  modeResidue(atomIdx);              break;
+    case 'dihedral': modeDihedral(atomIdx);             break;
+    case 'pair':     modePair(pairI, pairJ);            break;
+    case 'umbrella': modeUmbrella(windowIdx);           break;
+    case 'cluster':  modeFrame(clusterFrame);           break;  // reuse frame mode
+    default:         modeBfactor();                     break;
+  }
+
+  // ── Style buttons ─────────────────────────────────────────────────────────
+  el('style-group').addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('[data-mode]') as HTMLButtonElement | null;
+    if (!btn) return;
+    currentMode = btn.dataset.mode!;
+    document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    switch (mode) {
+      case 'bfactor':  applyBfactorReps();                    break;
+      case 'frame':
+      case 'cluster':  applyFrameReps();                      break;
+      case 'residue':
+      case 'dihedral': applyResidueReps(atomIdx);             break;
+      case 'umbrella': applyUmbrellaReps();                   break;
+    }
+  });
+
+  // ── Color scheme dropdown ─────────────────────────────────────────────────
+  el('color-scheme').addEventListener('change', (e) => {
+    currentColor = (e.target as HTMLSelectElement).value;
+    switch (mode) {
+      case 'frame':
+      case 'cluster':  applyFrameReps();                      break;
+      case 'residue':
+      case 'dihedral': applyResidueReps(atomIdx);             break;
+      case 'umbrella': applyUmbrellaReps();                   break;
+    }
+  });
+
+  // ── QM region panel controls (umbrella mode only) ─────────────────────────
+  if (mode === 'umbrella') {
+
+    // Toggle click-to-select mode
+    el('qm-pick-btn').addEventListener('click', () => {
+      qmSelectMode = !qmSelectMode;
+      el('qm-pick-btn').textContent = qmSelectMode ? '🔴 Stop picking' : '⊕ Pick atoms';
+      el('qm-pick-btn').style.background = qmSelectMode ? 'var(--accent-dim)' : '';
+      setInfoPill(qmSelectMode
+        ? 'Click atoms to add to QM region — click again to remove'
+        : `Umbrella window ${windowIdx} — click atoms to build QM region`);
+    });
+
+    // Apply a typed NGL selection string
+    el('qm-sel-apply').addEventListener('click', async () => {
+      const input = (el('qm-sel-input') as HTMLInputElement).value.trim();
+      if (!input) return;
+      // We store the selection string; on save, Rust resolves it to atom serials
+      // by re-reading the frame. For now, show it in the mask field directly.
+      el('qm-mask-out').textContent = input;
+      // Store as a special "string" marker — Rust will expand it
+      qmSerials = new Set([-1]); // sentinel: -1 means "use string selection"
+      updateQmPanel();
+    });
+
+    // Clear selection
+    el('qm-clear-btn').addEventListener('click', () => {
+      qmSerials.clear();
+      const inp = el('qm-sel-input') as HTMLInputElement;
+      inp.value = '';
+      el('qm-mask-out').textContent = '—';
+      invoke('clear_qm_region').catch(() => {});
+      updateQmPanel();
+      applyUmbrellaReps();
+    });
+
+    // Save QM region to Rust AppData
+    el('qm-save-btn').addEventListener('click', async () => {
+      const btn = el('qm-save-btn') as HTMLButtonElement;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        // If user typed a selection string, pass it via the input; otherwise use serials
+        const selInput = (el('qm-sel-input') as HTMLInputElement).value.trim();
+        let serialsToSave = Array.from(qmSerials).filter(s => s > 0);
+
+        if (selInput && serialsToSave.length === 0) {
+          // Ask Rust to resolve the NGL selection string to serials
+          const resolved = await invoke<number[]>('resolve_qm_selection', {
+            selectionStr: selInput,
+            windowIdx: currentWindowIdx,
+          });
+          serialsToSave = resolved;
+          qmSerials = new Set(resolved);
+        }
+
+        const region = await invoke<any>('save_qm_region', {
+          serials: serialsToSave,
+          windowIdx: currentWindowIdx,
+        });
+
+        el('qm-mask-out').textContent = region.amber_mask;
+        el('qm-natoms-out').textContent = `${region.n_atoms} atoms`;
+        btn.textContent = '✓ Saved';
+        setTimeout(() => { btn.textContent = 'Save QM Region'; btn.disabled = false; }, 1500);
+        updateQmPanel();
+        applyUmbrellaReps();
+
+        // Notify parent window (main UI) that QM region was saved
+        try { (window.opener as any)?.postMessage({ type: 'qm_region_saved', region }, '*'); } catch (_) {}
+      } catch (e) {
+        btn.textContent = 'Save QM Region';
+        btn.disabled = false;
+        setStatus(`Save failed: ${e}`);
+        setTimeout(() => setStatus('', true), 3000);
+      }
+    });
+
+    // Export buttons
+    el('qm-export-amber').addEventListener('click', () => {
+      const mask = el('qm-mask-out').textContent ?? '';
+      if (mask === '—') return;
+      navigator.clipboard?.writeText(mask);
+      el('qm-export-amber').textContent = '✓ Copied';
+      setTimeout(() => { el('qm-export-amber').textContent = 'AMBER mask'; }, 1500);
+    });
+
+    el('qm-export-xyz').addEventListener('click', async () => {
+      const region = await invoke<any>('get_qm_region').catch(() => null);
+      if (!region) return;
+      const lines = [String(region.n_atoms), `QM region — window ${region.window_idx}`];
+      for (const a of region.atoms) {
+        lines.push(`${a.element}  ${a.x.toFixed(6)}  ${a.y.toFixed(6)}  ${a.z.toFixed(6)}`);
+      }
+      navigator.clipboard?.writeText(lines.join('\n'));
+      el('qm-export-xyz').textContent = '✓ Copied';
+      setTimeout(() => { el('qm-export-xyz').textContent = 'XYZ coords'; }, 1500);
+    });
+
+    el('qm-export-orca').addEventListener('click', async () => {
+      const region = await invoke<any>('get_qm_region').catch(() => null);
+      if (!region) return;
+      const lines = ['%coords', '  CTyp xyz', '  Charge 0', '  Mult 1', '  Units Angs', '  coords'];
+      for (const a of region.atoms) {
+        lines.push(`    ${a.element}  ${a.x.toFixed(6)}  ${a.y.toFixed(6)}  ${a.z.toFixed(6)}`);
+      }
+      lines.push('  end', 'end');
+      navigator.clipboard?.writeText(lines.join('\n'));
+      el('qm-export-orca').textContent = '✓ Copied';
+      setTimeout(() => { el('qm-export-orca').textContent = 'ORCA block'; }, 1500);
+    });
+
+    updateQmPanel();
+  }
+
+  // ── NGL atom click ────────────────────────────────────────────────────────
+  stage!.signals.clicked.add((pd: any) => {
+    const info = el('residue-info');
+    if (!pd?.atom) { info.textContent = 'Click a residue for details'; return; }
+    const a = pd.atom;
+    info.textContent = `${a.resname} ${a.resno}  ·  ${a.atomname}  ·  chain ${a.chainname}  ·  serial ${a.serial}`;
+
+    // In QM pick mode, toggle this atom's serial in/out of the selection
+    if (mode === 'umbrella' && qmSelectMode && a.serial != null) {
+      const s = a.serial as number;
+      if (qmSerials.has(s)) { qmSerials.delete(s); }
+      else                  { qmSerials.add(s);    }
+      updateQmPanel();
+      applyUmbrellaReps();
+    }
+  });
+
+  window.addEventListener('resize', () => stage?.handleResize());
+}
+
+window.addEventListener('DOMContentLoaded', init);

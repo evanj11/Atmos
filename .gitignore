@@ -1,0 +1,21 @@
+# Node
+node_modules/
+dist/
+
+# Rust build artifacts
+src-tauri/target/
+
+# Tauri generated files
+src-tauri/gen/
+
+# Project files (user data, not source)
+*.atmos
+README.pdf
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp

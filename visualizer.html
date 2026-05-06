@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MD Trajectory Visualizer</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg0: #0d0e0f;
+      --bg1: #141618;
+      --bg2: #1c1f21;
+      --bg3: #242729;
+      --border: #2e3235;
+      --border-hi: #3d4245;
+      --accent: #00c4a7;
+      --accent-dim: #00856e;
+      --text: #e2e4e6;
+      --muted: #7a7f85;
+      --danger: #e05c5c;
+      --success: #4ec97b;
+      --font-sans: 'IBM Plex Sans', sans-serif;
+      --font-mono: 'IBM Plex Mono', monospace;
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg0);
+      color: var(--text);
+      font-family: var(--font-sans);
+      overflow: hidden;
+    }
+
+    /* ── Shell ── */
+    .shell {
+      display: grid;
+      grid-template-rows: 44px 1fr 72px;
+      height: 100vh;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: var(--bg1);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 12px;
+    }
+    .logo {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--accent);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .sep { width: 1px; height: 18px; background: var(--border); }
+    .header-sub { color: var(--muted); font-size: 10px; letter-spacing: .07em; text-transform: uppercase; }
+
+    /* Style selector in header */
+    .style-group {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .style-btn {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 4px 9px;
+      cursor: pointer;
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .style-btn:hover { border-color: var(--border-hi); color: var(--text); }
+    .style-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #000;
+    }
+
+    /* Color scheme selector */
+    .color-wrap {
+      margin-left: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .color-lbl {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .color-select {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 4px 8px;
+      outline: none;
+      cursor: pointer;
+    }
+    .color-select:focus { border-color: var(--accent-dim); }
+
+    /* ── Viewport ── */
+    #viewport {
+      width: 100%;
+      height: 100%;
+      background: #060708;
+      display: block;
+    }
+
+    /* ── Controls bar ── */
+    .controls {
+      background: var(--bg1);
+      border-top: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: auto 1fr auto auto;
+      align-items: center;
+      gap: 12px;
+      padding: 0 16px;
+    }
+
+    .frame-lbl {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+      min-width: 80px;
+    }
+
+    /* Custom range slider */
+    input[type=range] {
+      -webkit-appearance: none;
+      background: transparent;
+      width: 100%;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 4px;
+      background: var(--bg3);
+      border-radius: 2px;
+      border: 1px solid var(--border);
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      height: 14px;
+      width: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      margin-top: -6px;
+      cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb:hover { background: #00ddc0; }
+
+    /* Play/Pause button */
+    .play-btn {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 5px 12px;
+      cursor: pointer;
+      transition: all .15s;
+      min-width: 56px;
+      text-align: center;
+    }
+    .play-btn:hover { border-color: var(--border-hi); }
+    .play-btn.playing { border-color: var(--accent-dim); color: var(--accent); }
+
+    /* FPS control */
+    .fps-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .fps-lbl { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+    .fps-input {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 3px 6px;
+      width: 40px;
+      outline: none;
+      text-align: center;
+    }
+    .fps-input:focus { border-color: var(--accent-dim); }
+
+    /* Status overlay */
+    #status-overlay {
+      position: absolute;
+      top: 54px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(20,22,24,0.92);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 16px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+      pointer-events: none;
+      transition: opacity .3s;
+    }
+    #status-overlay.hidden { opacity: 0; }
+
+    /* Highlight label — bottom-left, shown when a residue is selected */
+    #highlight-label {
+      position: absolute;
+      bottom: 80px;
+      left: 16px;
+      background: rgba(20,22,24,0.92);
+      border: 1px solid var(--accent-dim);
+      border-radius: 4px;
+      padding: 5px 12px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--accent);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .25s;
+    }
+
+    /* B-factor active indicator */
+    #bfactor-indicator {
+      position: absolute;
+      top: 54px;
+      right: 16px;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      background: rgba(20,22,24,0.92);
+      border: 1px solid var(--accent-dim);
+      border-radius: 4px;
+      padding: 5px 12px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--accent);
+      pointer-events: none;
+    }
+    #bfactor-indicator::before {
+      content: '';
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    /* Clear highlight button in controls bar */
+    .clear-btn {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .clear-btn:hover { border-color: var(--border-hi); color: var(--text); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+
+    <!-- Header with style controls -->
+    <header class="header">
+      <span class="logo">Visualizer</span>
+      <span class="sep"></span>
+      <span class="header-sub">3D Trajectory</span>
+
+      <div class="style-group" id="style-group">
+        <button class="style-btn active" data-mode="cartoon">Cartoon</button>
+        <button class="style-btn" data-mode="backbone">Backbone</button>
+        <button class="style-btn" data-mode="ball+stick">Ball+Stick</button>
+        <button class="style-btn" data-mode="licorice">Sticks</button>
+        <button class="style-btn" data-mode="spacefill">Surface</button>
+        <button class="style-btn" data-mode="point">Points</button>
+      </div>
+
+      <div class="color-wrap">
+        <span class="color-lbl">Color</span>
+        <select class="color-select" id="color-scheme">
+          <option value="resname">Residue</option>
+          <option value="chainname">Chain</option>
+          <option value="element">Element</option>
+          <option value="bfactor">B-factor</option>
+          <option value="residueindex">Index</option>
+          <option value="atomindex">Atom idx</option>
+          <option value="uniform">Uniform</option>
+        </select>
+      </div>
+    </header>
+
+    <!-- NGL viewport -->
+    <div id="viewport"></div>
+
+    <!-- Playback controls -->
+    <div class="controls">
+      <button class="play-btn" id="play-btn">▶ Play</button>
+
+      <input type="range" id="frame-slider" min="0" value="0" step="1" />
+
+      <span class="frame-lbl" id="frame-label">Frame 0 / 0</span>
+
+      <div class="fps-wrap">
+        <span class="fps-lbl">FPS</span>
+        <input class="fps-input" type="number" id="fps-input" value="25" min="1" max="120" />
+      </div>
+
+      <button class="clear-btn" id="clear-highlight-btn">Clear selection</button>
+    </div>
+  </div>
+
+  <!-- Loading overlay -->
+  <div id="status-overlay">Loading structure…</div>
+
+  <!-- Residue highlight label (bottom-left, fades in on selection) -->
+  <div id="highlight-label"></div>
+
+  <!-- B-factor active indicator (top-right, shown after RMSF/ENM push) -->
+  <div id="bfactor-indicator">B-factor coloring active</div>
+
+  <script src="https://unpkg.com/ngl@2.0.0-dev.38/dist/ngl.js"></script>
+  <script type="module" src="/src/visualizer.ts"></script>
+</body>
+</html>
