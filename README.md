@@ -128,12 +128,14 @@ git clone https://github.com/evanj/Atmos
 cd Atmos/headless
 npm install
 npm run build
-scp -r dist/ {username}@{hpcc_login}
+scp -r dist/ {username}@{hpcc_login}:/path/to/Atmos
 ```
 
 ### Build GUI interface on cluster
 
 ```bash
+scp -r Atmos/headless/src-rust {username}@{hpcc_login}:/path/to/Atmos
+
 # on hpcc cluster
 cd /path/to/src-rust/
 # if hpcc has compatible openssl version (try first)
