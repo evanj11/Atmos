@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "md-analyzer-headless",
+  "productName": "atmos-headless",
   "version": "0.1.0",
-  "identifier": "com.evanj.md-analyzer-headless",
+  "identifier": "com.evanj.atmos-headless",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "md-analyzer-headless",
+        "title": "atmos-headless",
         "width": 800,
         "height": 600
       }
