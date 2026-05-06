@@ -143,6 +143,7 @@ cargo build --release
 # if no compatible openssl version on hpcc, install openssl using conda, then
 OPENSSL_DIR=$CONDA_PREFIX LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH cargo build --release
 ```
+Note: There is a known issue with some HPCC clusters and OpenBLAS. This will only affect some users.
 
 ### Running Atmos on HPCC
 
