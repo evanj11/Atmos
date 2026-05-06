@@ -156,7 +156,7 @@ export OPENSSL_DIR=$CONDA_PREFIX
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 export DIST_DIR=/path/to/atmos/dist
 
-/path/to/md-server
+/path/to/atmos-server
 ```
 2. Once server is running on HPCC, open http://localhost:7373 on your browser
 
