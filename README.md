@@ -99,6 +99,7 @@ xcode-select --install
 sudo apt install libopenblas-dev   # Debian/Ubuntu
 sudo dnf install openblas-devel    # Fedora/RHEL
 ```
+Note: for Linux users, pre-built chemfiles may be incompatable, add `features = "build-from-scratch"` to Cargo.toml before building.
 
 ### Build
 
